@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ride Fare Anomaly Detector</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAFV-Eza391mYfseqI-M7XoIsjMphwASCE&libraries=places"></script>
+    <style>
+        :root {
+            --primary-color: #3498db;
+            --secondary-color: #2ecc71;
+            --background-color: #f4f6f7;
+            --text-color: #2c3e50;
+            --border-radius: 8px;
+            --box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        }
+
+        body {
+            background-color: var(--background-color);
+            color: var(--text-color);
+            line-height: 1.6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            background-color: white;
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+            width: 100%;
+            max-width: 500px;
+            padding: 30px;
+            transition: all 0.3s ease;
+        }
+
+        .container:hover {
+            box-shadow: 0 8px 15px rgba(0, 0, 0, 0.15);
+        }
+
+        h2 {
+            text-align: center;
+            color: var(--primary-color);
+            margin-bottom: 25px;
+            font-weight: 600;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        input, button {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: var(--border-radius);
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+
+        input:focus, button:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.2);
+        }
+
+        button {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-weight: 500;
+            margin-top: 10px;
+        }
+
+        button:hover {
+            background-color: #2980b9;
+            transform: translateY(-2px);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        #map {
+            height: 300px;
+            width: 100%;
+            margin: 20px 0;
+            border-radius: var(--border-radius);
+            box-shadow: var(--box-shadow);
+        }
+
+        #result {
+            text-align: center;
+            padding: 15px;
+            border-radius: var(--border-radius);
+            margin-top: 20px;
+            font-weight: 500;
+        }
+
+        .anomaly {
+            background-color: #ff6b6b;
+            color: white;
+        }
+
+        .normal {
+            background-color: #2ecc71;
+            color: white;
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                padding: 20px;
+                margin: 0 10px;
+            }
+        }
+
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border-left-color: var(--primary-color);
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+            display: none;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .fade-in {
+            animation: fadeIn 0.5s ease-out;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Ride Fare Anomaly Detector</h2>
+        
+        <div class="form-group">
+            <div id="locationInfo">Fetching current location...</div>
+            
+            <input type="text" id="pickupLocation" placeholder="Pickup Location" readonly>
+            <input type="text" id="dropLocation" placeholder="Drop Location" required>
+            
+            <button id="calculateDistance">Calculate Distance</button>
+        </div>
+        
+        <div id="map"></div>
+        
+        <div class="form-group">
+            <div id="distanceInfo"></div>
+            
+            <input type="number" id="fare" placeholder="Fare" step="0.1" required>
+            <button id="checkAnomaly">Check Fare Anomaly</button>
+        </div>
+        
+        <div id="result" class="fade-in"></div>
+        
+        <div class="spinner" id="loadingSpinner"></div>
+    </div>
+
+    <script>
+        let map;
+        let directionsService;
+        let directionsRenderer;
+        let dropAutocomplete;
+        let currentLocation = null;
+        let calculatedDistance = 0;
+
+        function showLoading() {
+            document.getElementById('loadingSpinner').style.display = 'block';
+            document.getElementById('result').textContent = '';
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingSpinner').style.display = 'none';
+        }
+
+        function initMap() {
+            // Initialize map
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: { lat: 0, lng: 0 },
+                zoom: 2
+            });
+
+            // Initialize services
+            directionsService = new google.maps.DirectionsService();
+            directionsRenderer = new google.maps.DirectionsRenderer();
+            directionsRenderer.setMap(map);
+
+            // Autocomplete for drop location
+            dropAutocomplete = new google.maps.places.Autocomplete(
+                document.getElementById('dropLocation')
+            );
+
+            // Get current location
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        currentLocation = {
+                            lat: position.coords.latitude,
+                            lng: position.coords.longitude
+                        };
+
+                        // Reverse geocode to get human-readable address
+                        const geocoder = new google.maps.Geocoder();
+                        geocoder.geocode({ location: currentLocation }, (results, status) => {
+                            const locationInfoDiv = document.getElementById('locationInfo');
+                            const pickupLocationInput = document.getElementById('pickupLocation');
+                            
+                            if (status === 'OK' && results[0]) {
+                                pickupLocationInput.value = results[0].formatted_address;
+                                locationInfoDiv.textContent = `Current Location: ${results[0].formatted_address}`;
+                                locationInfoDiv.style.color = 'green';
+                            } else {
+                                locationInfoDiv.textContent = 'Could not determine exact location';
+                                locationInfoDiv.style.color = 'red';
+                            }
+                        });
+
+                        // Center map on current location
+                        map.setCenter(currentLocation);
+                        map.setZoom(15);
+
+                        // Add marker for current location
+                        new google.maps.Marker({
+                            position: currentLocation,
+                            map: map,
+                            title: 'Your Location',
+                            icon: 'http://maps.google.com/mapfiles/ms/icons/blue-dot.png'
+                        });
+                    },
+                    (error) => {
+                        const locationInfoDiv = document.getElementById('locationInfo');
+                        locationInfoDiv.textContent = `Geolocation error: ${error.message}`;
+                        locationInfoDiv.style.color = 'red';
+                    },
+                    {
+                        enableHighAccuracy: true,
+                        timeout: 5000,
+                        maximumAge: 0
+                    }
+                );
+            } else {
+                const locationInfoDiv = document.getElementById('locationInfo');
+                locationInfoDiv.textContent = 'Geolocation is not supported by this browser.';
+                locationInfoDiv.style.color = 'red';
+            }
+
+            // Calculate distance button event
+            document.getElementById('calculateDistance').addEventListener('click', calculateAndDisplayRoute);
+            
+            // Check anomaly button event
+            document.getElementById('checkAnomaly').addEventListener('click', checkFareAnomaly);
+        }
+
+        function calculateAndDisplayRoute() {
+            const dropLocation = document.getElementById('dropLocation').value;
+            const distanceInfoDiv = document.getElementById('distanceInfo');
+
+            if (!currentLocation) {
+                alert('Waiting for current location to be determined');
+                return;
+            }
+
+            if (!dropLocation) {
+                alert('Please enter a drop location');
+                return;
+            }
+
+            showLoading();
+
+            directionsService.route(
+                {
+                    origin: new google.maps.LatLng(currentLocation.lat, currentLocation.lng),
+                    destination: dropLocation,
+                    travelMode: 'DRIVING'
+                },
+                (response, status) => {
+                    hideLoading();
+
+                    if (status === 'OK') {
+                        directionsRenderer.setDirections(response);
+                        
+                        // Calculate distance
+                        calculatedDistance = response.routes[0].legs[0].distance.value / 1000; // Convert to kilometers
+                        
+                        distanceInfoDiv.textContent = `Distance: ${calculatedDistance.toFixed(2)} km`;
+                        distanceInfoDiv.style.color = 'green';
+                    } else {
+                        distanceInfoDiv.textContent = 'Could not calculate distance';
+                        distanceInfoDiv.style.color = 'red';
+                        calculatedDistance = 0;
+                    }
+                }
+            );
+        }
+
+        function checkFareAnomaly() {
+            const fare = parseFloat(document.getElementById('fare').value);
+            const resultDiv = document.getElementById('result');
+
+            if (!calculatedDistance || !fare) {
+                alert('Please calculate distance and enter fare first');
+                return;
+            }
+
+            showLoading();
+
+            const payload = {
+                pickup_distance: calculatedDistance / 2,  // Estimating pickup half the total distance
+                drop_distance: calculatedDistance / 2,    // Estimating drop half the total distance
+                fare: fare
+            };
+
+            axios.post('/predict', payload)
+                .then(response => {
+                    hideLoading();
+
+                    if (response.data.is_anomaly) {
+                        resultDiv.textContent = 'Anomaly Detected! This fare seems unusual.';
+                        resultDiv.className = 'result anomaly';
+                    } else {
+                        resultDiv.textContent = 'Normal Fare. Nothing suspicious found.';
+                        resultDiv.className = 'result normal';
+                    }
+                })
+                .catch(error => {
+                    hideLoading();
+                    console.error('Error:', error);
+                    resultDiv.textContent = 'Error checking anomaly';
+                    resultDiv.style.color = 'orange';
+                });
+        }
+
+        // Initialize map when page loads
+        google.maps.event.addDomListener(window, 'load', initMap);
+    </script>
+</body>
+</html>
